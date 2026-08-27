@@ -1,14 +1,16 @@
-# Welcome to your Lovable project
+# Teryaq Stock Check
+
+dESIGN A NEW SECURE MOBILE-FIRST INTERFACE FOR tERYAQ CALLED:"استعلام المخزون"purpose:tHIS PAGE WILL BE USED BY A PHARMACY SOCIAL-MEDIA/CUSTOMER-SERVICE EMPLOYEEWHILE REPLYING TO CUSTOMERS ON fACEBOOK AND OTHER MESSAGING CHANNELS.tHE EMPLOYEE NEEDS only TO KNOW:- WHETHER A PRODUCT IS CURRENTLY AVAILABLE- CURRENT QUANTITY- CURRENT selling PRICEtHIS IS not AN ACCOUNTING OR PHARMACY-MANAGEMENT SCREEN.important:ui/ux design phase only.dO not CREATE A NEW BACKEND.dO not MODIFY EXISTING apiS.dO not MODIFY sql.dO not CREATE sUPABASE/lOVABLE cLOUD TABLES.dO not INVENT ACCOUNTING OR INVENTORY LOGIC.dO not USE MOCK/DEMO INVENTORY VALUES AND PRESENT THEM AS REAL.dO not EXPOSE PURCHASE PRICE, PROFIT, SUPPLIERS, CUSTOMERS, INVOICES,SALES HISTORY, STOCK MOVEMENTS, OR ACCOUNTING INFORMATION.tHE REAL IMPLEMENTATION WILL LATER BE CONNECTED BY cODEX TO THE EXISTINGtERYAQ sql cONNECTOR AND aLMOHASEBsql.==================================================1. access / login==================================================dESIGN A SIMPLE SECURE ACCESS SCREEN BEFORE INVENTORY SEARCH.aRABIC TITLE:استعلام المخزونsUBTITLE:أداة خدمة الزبائنtHE FINAL PRODUCTION VERSION WILL REQUIRE AUTHORIZED ACCESS.fOR NOW DESIGN THE AUTHENTICATION STATE/ui ONLY.dO not IMPLEMENT FAKE AUTHENTICATION.tHE INTERFACE SHOULD CLEARLY SUPPORT:- LOGIN/ACCESS CODE- LOGOUT- UNAUTHORIZED STATE==================================================2. main search screen==================================================aFTER AUTHORIZED ACCESS, SHOW A VERY CLEAN MOBILE INTERFACE.hEADER:استعلام المخزونصيدلية الترياق الشافيpRIMARY FOCUS MUST BE A LARGE SEARCH FIELD:"ابحث باسم الصنف أو الباركود"sEARCH MUST BE THE DOMINANT ACTION.tHE FINAL REAL SYSTEM WILL PERFORM server-side search ACROSS THE COMPLETEINVENTORY, NOT ONLY THE FIRST 100 OR 500 PRODUCTS.dO NOT DESIGN A HUGE PRELOADED PRODUCT LIST.==================================================3. product result==================================================eACH PRODUCT RESULT SHOULD SHOW only:- pRODUCT NAME- sELLING PRICE- cURRENT AVAILABLE QUANTITY- uNIT, WHEN AVAILABLE- aVAILABILITY STATUSaVAILABILITY STATES:متوفركمية محدودةغير متوفرuSE PROFESSIONAL VISUAL INDICATORS:- GREEN FOR AVAILABLE- AMBER/ORANGE FOR LIMITED QUANTITY- RED FOR UNAVAILABLEdO NOT OVER-COLOR THE WHOLE CARD.kEEP THE CARD CLEAN AND PROFESSIONAL.selling price SHOULD BE VISUALLY PROMINENT.eXAMPLE VISUAL HIERARCHY:اسم الصنف18.000 د.لالرصيد: 4 علبةمتوفرdO not USE THIS EXAMPLE AS REAL INVENTORY DATA.==================================================4. customer reply action==================================================aDD A PROMINENT ACTION:"نسخ الرد"tHE FINAL APPLICATION WILL GENERATE A CUSTOMER-SERVICE REPLY FROM realPRODUCT DATA.dESIGN THE INTERACTION AND PREVIEW STATE.eXPECTED REPLY STYLE WHEN AVAILABLE:"متوفر حاليًا في صيدلية الترياق الشافيالسعر: [REAL SELLING PRICE] د.ل"wHEN UNAVAILABLE:"الصنف غير متوفر حاليًا في صيدلية الترياق الشافي."dO not HARD-CODE FAKE PRODUCT VALUES.aLSO PROVIDE A SMALL ACTION FOR:"نسخ اسم الصنف"==================================================5. multiple search results==================================================sEARCH MAY RETURN SIMILAR PRODUCTS.dESIGN COMPACT RESULTS SUITABLE FOR QUICKLY DISTINGUISHING:- DIFFERENT STRENGTHS- DIFFERENT PACK SIZES- DIFFERENT MANUFACTURERS- DIFFERENT FORMSdO NOT MAKE CARDS OVERSIZED.tHE EMPLOYEE MAY HANDLE MANY CUSTOMER MESSAGES QUICKLY,SO INFORMATION DENSITY AND SPEED ARE MORE IMPORTANT THAN DECORATIVE DESIGN.==================================================6. live data / connection state==================================================tHIS IS CRITICAL.dESIGN A SMALL CONNECTION INDICATOR:"متصل بالمخزون"WITH LAST SUCCESSFUL UPDATE/CHECK TIME.iF THE REAL sql/api CONNECTION IS UNAVAILABLE,THE INTERFACE MUST not PRESENT AN OLD QUANTITY AS IF IT WERE LIVE.dESIGN A CLEAR OFFLINE/UNAVAILABLE STATE SUCH AS:"تعذر التحقق من المخزون حاليًا"AND:"آخر اتصال ناجح: [TIME]"iN THAT STATE, MAKE IT VISUALLY CLEAR THAT STOCK AVAILABILITYCANNOT CURRENTLY BE CONFIRMED.==================================================7. security / information boundary==================================================tHE EMPLOYEE INTERFACE MUST never DISPLAY:- PURCHASE PRICE- PROFIT- SUPPLIER- CUSTOMER ACCOUNTS- SUPPLIER ACCOUNTS- INVOICES- SALES TOTALS- ITEM MOVEMENT HISTORY- ANALYTICS- sql INFORMATION- SERVER INFORMATION- INTERNAL tERYAQ NAVIGATIONtHIS SHOULD FEEL LIKE A SEPARATE RESTRICTED CUSTOMER-SERVICE TOOL,NOT A REDUCED COPY OF THE erp.==================================================8. mobile design==================================================dESIGN SPECIFICALLY FOR aNDROID/MOBILE USE FIRST.rEQUIREMENTS:- aRABIC rtl- cAIRO TYPOGRAPHY- FAST VISUAL SCANNING- COMPACT erp/CUSTOMER-SERVICE STYLE- LARG
 
 This project was built with [Lovable](https://lovable.dev).
 
 ## Build with Lovable
 
-Open your project in the [Lovable editor](https://lovable.dev) and keep building.
+Continue developing this project in the [Lovable editor](https://lovable.dev/projects/a4b18a98-c3d6-4e48-b8a4-0c87d81ccb28).
 
 - **Ship faster**: describe what you want to build and Lovable handles the code.
-- **Stay in sync**: connect the project to GitHub and every change made in Lovable is committed straight to your repository.
-- **Full ownership**: this code is yours. Push to your repository and your changes sync back into Lovable, ready for your next prompt.
+- **Stay in sync**: every change made in Lovable is committed straight to this repository.
+- **Full ownership**: this code is yours. Push to `main` on GitHub and your changes sync back into Lovable, ready for your next prompt.
 
 ## Development
 
@@ -20,10 +22,3 @@ cd <repository-name>
 npm i
 npm run dev
 ```
-
-## Built with
-
-- TanStack Start
-- TypeScript
-- React
-- Tailwind CSS
