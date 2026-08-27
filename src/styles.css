@@ -59,7 +59,16 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --font-sans: "Cairo", ui-sans-serif, system-ui, sans-serif;
+  --spacing-13: 3.25rem;
 }
+
 
 :root {
   --radius: 0.625rem;
@@ -69,8 +78,15 @@
   --card-foreground: oklch(0.129 0.042 264.695);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.129 0.042 264.695);
-  --primary: oklch(0.208 0.042 265.755);
-  --primary-foreground: oklch(0.984 0.003 247.858);
+  --primary: oklch(0.52 0.11 175);
+  --primary-foreground: oklch(0.99 0.005 175);
+  --ok: oklch(0.53 0.13 156);
+  --ok-soft: oklch(0.96 0.03 156);
+  --warn: oklch(0.6 0.13 70);
+  --warn-soft: oklch(0.96 0.04 80);
+  --danger: oklch(0.55 0.19 25);
+  --danger-soft: oklch(0.96 0.03 25);
+
   --secondary: oklch(0.968 0.007 247.896);
   --secondary-foreground: oklch(0.208 0.042 265.755);
   --muted: oklch(0.968 0.007 247.896);
