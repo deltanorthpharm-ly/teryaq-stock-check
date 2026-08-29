@@ -105,3 +105,11 @@ export function searchStock(query: string, page = 1, pageSize = 20) {
   });
   return request<SearchResponse>(`/api/stock-check/search?${params.toString()}`);
 }
+
+export function fetchInventoryPage(page = 1, pageSize = 200) {
+  const params = new URLSearchParams({
+    page: String(page),
+    pageSize: String(pageSize),
+  });
+  return request<SearchResponse>(`/api/stock-check/inventory?${params.toString()}`);
+}

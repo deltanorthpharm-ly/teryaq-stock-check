@@ -1,13 +1,16 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
   AlertTriangle,
+  CheckCircle2,
   Copy,
+  Database,
   Loader2,
   Lock,
   LogOut,
   PackageSearch,
+  RefreshCw,
   Search,
   ShieldCheck,
   Wifi,
@@ -15,6 +18,7 @@ import {
 } from "lucide-react";
 
 import {
+  fetchInventoryPage,
   getSession,
   getStatus,
   login,
@@ -24,8 +28,12 @@ import {
   type StockCheckItem,
   type StatusResponse,
 } from "../lib/stockCheckApi";
+import { loadStockCheckCache, saveStockCheckCache } from "../lib/stockCheckCache";
 
-const PAGE_SIZE = 20;
+const SEARCH_PAGE_SIZE = 20;
+const SYNC_PAGE_SIZE = 300;
+const LOCAL_PAGE_SIZE = 100;
+const RESYNC_INTERVAL_MS = 30_000;
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -45,7 +53,8 @@ export const Route = createFileRoute("/")({
 });
 
 type AuthState = "checking" | "locked" | "authenticated";
-type SearchState = "idle" | "loading" | "success" | "empty" | "offline" | "error";
+type SyncState = "idle" | "loading-cache" | "syncing" | "live" | "offline" | "error";
+type SearchState = "idle" | "loading" | "success" | "empty" | "error";
 
 function formatLyd(value: number | null | undefined) {
   if (value == null || !Number.isFinite(Number(value))) return "غير متوفر";
@@ -55,18 +64,96 @@ function formatLyd(value: number | null | undefined) {
   }).format(Number(value))} د.ل`;
 }
 
-function formatCheckTime(value?: string | null) {
+function formatDateTime(value?: string | null) {
   if (!value) return "";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleTimeString("ar-LY", { hour: "2-digit", minute: "2-digit" });
+  return date.toLocaleString("ar-LY", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
-function replyFor(item: StockCheckItem) {
-  if (item.availability === "available") {
-    return `متوفر حاليًا في صيدلية الترياق الشافي\nالسعر: ${formatLyd(item.sellingPrice)}`;
+function normalize(value: string | number | null | undefined) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function isNumericQuery(value: string) {
+  return /^\d+$/.test(value.trim());
+}
+
+function localSearch(items: StockCheckItem[], query: string) {
+  const term = normalize(query);
+  if (!term) return items;
+
+  return items
+    .map((item) => {
+      const name = normalize(item.name);
+      const barcode = normalize(item.barcode);
+      const code = normalize(item.itemCode);
+      let rank = Number.POSITIVE_INFINITY;
+
+      if (barcode === term) rank = 0;
+      else if (barcode.startsWith(term)) rank = 1;
+      else if (code === term) rank = 2;
+      else if (name.startsWith(term)) rank = 3;
+      else if (name.includes(term) || barcode.includes(term) || code.includes(term)) rank = 4;
+
+      return { item, rank };
+    })
+    .filter((entry) => Number.isFinite(entry.rank))
+    .sort((a, b) => a.rank - b.rank || a.item.name.localeCompare(b.item.name, "ar"))
+    .map((entry) => entry.item);
+}
+
+function isSafeItemShape(item: StockCheckItem) {
+  const keys = Object.keys(item).sort();
+  const allowed = [
+    "availability",
+    "barcode",
+    "formattedQuantity",
+    "itemCode",
+    "name",
+    "quantity",
+    "sellingPrice",
+    "unit",
+  ].sort();
+  return keys.every((key, index) => key === allowed[index]) && keys.length === allowed.length;
+}
+
+function replyFor(item: StockCheckItem, offline: boolean) {
+  if (!offline) {
+    if (item.availability === "available") {
+      return `متوفر حاليًا في صيدلية الترياق الشافي\nالسعر: ${formatLyd(item.sellingPrice)}`;
+    }
+    return "الصنف غير متوفر حاليًا في صيدلية الترياق الشافي.";
   }
-  return "الصنف غير متوفر حاليًا في صيدلية الترياق الشافي.";
+
+  if (item.availability === "available") {
+    return `حسب آخر تحديث لدينا، كان الصنف متوفرًا في صيدلية الترياق الشافي.\nالسعر المسجل في آخر تحديث: ${formatLyd(item.sellingPrice)}\nيرجى تأكيد التوفر قبل الاعتماد.`;
+  }
+
+  return "حسب آخر تحديث لدينا، كان الصنف غير متوفر في صيدلية الترياق الشافي.\nيرجى تأكيد التوفر قبل الاعتماد.";
+}
+
+async function writeClipboard(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  document.body.removeChild(textarea);
 }
 
 function StockLookupPage() {
@@ -75,20 +162,113 @@ function StockLookupPage() {
   const [loginMessage, setLoginMessage] = useState("");
   const [loginLoading, setLoginLoading] = useState(false);
   const [query, setQuery] = useState("");
-  const [submittedQuery, setSubmittedQuery] = useState("");
-  const [items, setItems] = useState<StockCheckItem[]>([]);
-  const [page, setPage] = useState(1);
-  const [totalCount, setTotalCount] = useState(0);
-  const [hasMore, setHasMore] = useState(false);
+  const [inventory, setInventory] = useState<StockCheckItem[]>([]);
+  const [inventoryTotal, setInventoryTotal] = useState(0);
+  const [lastSuccessfulSync, setLastSuccessfulSync] = useState<string | null>(null);
+  const [syncState, setSyncState] = useState<SyncState>("idle");
+  const [syncMessage, setSyncMessage] = useState("");
+  const [syncProgress, setSyncProgress] = useState({ loaded: 0, total: 0 });
+  const [searchItems, setSearchItems] = useState<StockCheckItem[]>([]);
+  const [searchTotal, setSearchTotal] = useState(0);
+  const [searchPage, setSearchPage] = useState(1);
+  const [searchHasMore, setSearchHasMore] = useState(false);
   const [searchState, setSearchState] = useState<SearchState>("idle");
+  const [searchMessage, setSearchMessage] = useState("");
+  const [visibleLimit, setVisibleLimit] = useState(LOCAL_PAGE_SIZE);
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [toast, setToast] = useState<string | null>(null);
-  const [message, setMessage] = useState("");
 
-  const lastCheckText = useMemo(
-    () => formatCheckTime(status?.lastSuccessfulCheck || status?.serverTime),
-    [status],
-  );
+  const initialisedRef = useRef(false);
+  const syncingRef = useRef(false);
+  const searchSequenceRef = useRef(0);
+  const offline = syncState === "offline" || status?.live === false;
+  const canUseLocalSearch = offline || !query.trim();
+
+  const localResults = useMemo(() => localSearch(inventory, query), [inventory, query]);
+  const activeResults = query.trim() && !canUseLocalSearch ? searchItems : localResults;
+  const activeTotal = query.trim() && !canUseLocalSearch ? searchTotal : localResults.length;
+  const visibleItems = activeResults.slice(0, visibleLimit);
+  const hasLocalMore = visibleItems.length < activeResults.length;
+  const lastSyncText = formatDateTime(lastSuccessfulSync || status?.lastSuccessfulCheck);
+
+  const setOfflineState = useCallback((message: string, lastCheck?: string | null) => {
+    setSyncState("offline");
+    setSyncMessage(message || "تعذر التحقق من المخزون حاليًا");
+    setStatus({
+      success: false,
+      live: false,
+      message,
+      lastSuccessfulCheck: lastCheck || lastSuccessfulSync,
+    });
+  }, [lastSuccessfulSync]);
+
+  const syncInventory = useCallback(async (options: { manual?: boolean } = {}) => {
+    if (syncingRef.current) return false;
+    syncingRef.current = true;
+    setSyncState("syncing");
+    setSyncMessage(options.manual ? "جاري تحديث المخزون..." : "");
+    setSyncProgress({ loaded: 0, total: inventoryTotal || 0 });
+
+    try {
+      let nextPage = 1;
+      let hasMore = true;
+      let totalCount = 0;
+      let lastCheck: string | null = null;
+      const synced: StockCheckItem[] = [];
+
+      while (hasMore) {
+        const result = await fetchInventoryPage(nextPage, SYNC_PAGE_SIZE);
+        totalCount = result.totalCount;
+        lastCheck = result.lastSuccessfulCheck || lastCheck;
+        synced.push(...result.rows.filter(isSafeItemShape));
+        hasMore = result.hasMore;
+
+        setInventory([...synced]);
+        setInventoryTotal(totalCount);
+        setSyncProgress({ loaded: synced.length, total: totalCount });
+        setStatus({
+          success: true,
+          live: true,
+          lastSuccessfulCheck: lastCheck,
+        });
+
+        nextPage += 1;
+      }
+
+      const completedAt = lastCheck || new Date().toISOString();
+      setLastSuccessfulSync(completedAt);
+      setInventoryTotal(totalCount);
+      setSyncState("live");
+      setSyncMessage("");
+      await saveStockCheckCache({
+        items: synced,
+        totalCount,
+        lastSuccessfulSync: completedAt,
+      });
+      return true;
+    } catch (error) {
+      const apiError = error instanceof StockCheckApiError ? error : null;
+      const text = error instanceof Error ? error.message : "تعذر تحديث المخزون.";
+
+      if (apiError?.status === 401) {
+        setAuth("locked");
+        setInventory([]);
+        setSearchItems([]);
+        setSearchState("idle");
+        setSyncState("idle");
+        setSyncMessage("انتهت الجلسة. أدخل رمز الدخول مرة أخرى.");
+      } else {
+        const lastCheck =
+          apiError?.payload && typeof apiError.payload === "object" && "lastSuccessfulCheck" in apiError.payload
+            ? String((apiError.payload as { lastSuccessfulCheck?: unknown }).lastSuccessfulCheck || lastSuccessfulSync || "")
+            : lastSuccessfulSync;
+        setOfflineState(text, lastCheck);
+      }
+      return false;
+    } finally {
+      syncingRef.current = false;
+    }
+  }, [inventoryTotal, lastSuccessfulSync, setOfflineState]);
 
   useEffect(() => {
     let cancelled = false;
@@ -106,17 +286,136 @@ function StockLookupPage() {
   }, []);
 
   useEffect(() => {
-    if (auth !== "authenticated") return;
-    getStatus()
-      .then(setStatus)
-      .catch((error) => {
-        setStatus({
-          success: false,
-          live: false,
-          message: error instanceof Error ? error.message : "تعذر التحقق من المخزون حاليًا",
+    if (auth !== "authenticated" || initialisedRef.current) return;
+    initialisedRef.current = true;
+
+    let cancelled = false;
+
+    async function initialise() {
+      setSyncState("loading-cache");
+      const cached = await loadStockCheckCache().catch(() => null);
+      if (cancelled) return;
+
+      if (cached) {
+        setInventory(cached.items);
+        setInventoryTotal(cached.totalCount);
+        setLastSuccessfulSync(cached.lastSuccessfulSync);
+        setSyncProgress({ loaded: cached.items.length, total: cached.totalCount });
+      }
+
+      const synced = await syncInventory();
+      if (!synced && cached && !cancelled) {
+        setInventory(cached.items);
+        setInventoryTotal(cached.totalCount);
+        setLastSuccessfulSync(cached.lastSuccessfulSync);
+      }
+    }
+
+    initialise();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [auth, syncInventory]);
+
+  useEffect(() => {
+    if (auth !== "authenticated") return undefined;
+
+    const interval = window.setInterval(async () => {
+      if (syncingRef.current) return;
+      try {
+        const nextStatus = await getStatus();
+        if (nextStatus.live && syncState === "offline") {
+          await syncInventory();
+        } else if (nextStatus.live) {
+          setStatus(nextStatus);
+        } else {
+          setOfflineState(nextStatus.message || "تعذر التحقق من المخزون حاليًا", nextStatus.lastSuccessfulCheck);
+        }
+      } catch (error) {
+        setOfflineState(error instanceof Error ? error.message : "تعذر التحقق من المخزون حاليًا");
+      }
+    }, RESYNC_INTERVAL_MS);
+
+    const onOnline = () => {
+      if (syncState === "offline") {
+        syncInventory();
+      }
+    };
+
+    window.addEventListener("online", onOnline);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("online", onOnline);
+    };
+  }, [auth, setOfflineState, syncInventory, syncState]);
+
+  useEffect(() => {
+    setVisibleLimit(LOCAL_PAGE_SIZE);
+    const trimmed = query.trim();
+
+    if (!trimmed) {
+      setSearchState("idle");
+      setSearchItems([]);
+      setSearchTotal(0);
+      setSearchHasMore(false);
+      setSearchMessage("");
+      return undefined;
+    }
+
+    if (canUseLocalSearch || (!isNumericQuery(trimmed) && trimmed.length < 2)) {
+      setSearchState(localSearch(inventory, trimmed).length ? "success" : "empty");
+      setSearchMessage(
+        !isNumericQuery(trimmed) && trimmed.length < 2
+          ? "اكتب حرفين على الأقل للبحث بالاسم، أو أدخل باركود/كود رقمي."
+          : "",
+      );
+      return undefined;
+    }
+
+    const sequence = searchSequenceRef.current + 1;
+    searchSequenceRef.current = sequence;
+    setSearchState("loading");
+    setSearchMessage("");
+
+    const timer = window.setTimeout(() => {
+      searchStock(trimmed, 1, SEARCH_PAGE_SIZE)
+        .then((result) => {
+          if (searchSequenceRef.current !== sequence) return;
+          setSearchItems(result.rows);
+          setSearchTotal(result.totalCount);
+          setSearchPage(result.page);
+          setSearchHasMore(result.hasMore);
+          setSearchState(result.rows.length ? "success" : "empty");
+          setStatus({
+            success: true,
+            live: result.live,
+            lastSuccessfulCheck: result.lastSuccessfulCheck,
+          });
+        })
+        .catch((error) => {
+          if (searchSequenceRef.current !== sequence) return;
+          const apiError = error instanceof StockCheckApiError ? error : null;
+          const text = error instanceof Error ? error.message : "تعذر تنفيذ البحث.";
+
+          if (apiError?.status === 401) {
+            setAuth("locked");
+            setSearchState("idle");
+            setSearchMessage("انتهت الجلسة. أدخل رمز الدخول مرة أخرى.");
+          } else {
+            setSearchState("error");
+            setSearchMessage(text);
+            const lastCheck =
+              apiError?.payload && typeof apiError.payload === "object" && "lastSuccessfulCheck" in apiError.payload
+                ? String((apiError.payload as { lastSuccessfulCheck?: unknown }).lastSuccessfulCheck || lastSuccessfulSync || "")
+                : lastSuccessfulSync;
+            setOfflineState(text, lastCheck);
+          }
         });
-      });
-  }, [auth]);
+    }, 300);
+
+    return () => window.clearTimeout(timer);
+  }, [canUseLocalSearch, inventory, lastSuccessfulSync, query, setOfflineState]);
 
   function notify(text: string) {
     setToast(text);
@@ -124,8 +423,25 @@ function StockLookupPage() {
   }
 
   async function copyText(text: string, successMessage: string) {
-    await navigator.clipboard.writeText(text);
+    await writeClipboard(text);
     notify(successMessage);
+  }
+
+  async function loadMoreSearchResults() {
+    const trimmed = query.trim();
+    if (!trimmed) return;
+    setSearchState("loading");
+    try {
+      const result = await searchStock(trimmed, searchPage + 1, SEARCH_PAGE_SIZE);
+      setSearchItems((current) => [...current, ...result.rows]);
+      setSearchTotal(result.totalCount);
+      setSearchPage(result.page);
+      setSearchHasMore(result.hasMore);
+      setSearchState("success");
+    } catch (error) {
+      setSearchState("error");
+      setSearchMessage(error instanceof Error ? error.message : "تعذر تحميل المزيد.");
+    }
   }
 
   async function handleLogin() {
@@ -135,6 +451,7 @@ function StockLookupPage() {
       const session = await login(pin);
       if (session.authenticated) {
         setPin("");
+        initialisedRef.current = false;
         setAuth("authenticated");
         return;
       }
@@ -149,57 +466,14 @@ function StockLookupPage() {
   async function handleLogout() {
     await logout().catch(() => undefined);
     setAuth("locked");
-    setItems([]);
+    setInventory([]);
+    setInventoryTotal(0);
+    setSearchItems([]);
     setQuery("");
-    setSubmittedQuery("");
     setSearchState("idle");
+    setSyncState("idle");
     setStatus(null);
-  }
-
-  async function runSearch(nextPage = 1) {
-    const trimmed = query.trim();
-    if (!trimmed) return;
-    setMessage("");
-    setSearchState(nextPage === 1 ? "loading" : "success");
-    try {
-      const result = await searchStock(trimmed, nextPage, PAGE_SIZE);
-      setStatus({
-        success: true,
-        live: result.live,
-        lastSuccessfulCheck: result.lastSuccessfulCheck,
-      });
-      setSubmittedQuery(trimmed);
-      setPage(result.page);
-      setTotalCount(result.totalCount);
-      setHasMore(result.hasMore);
-      setItems((current) => (nextPage === 1 ? result.rows : [...current, ...result.rows]));
-      if (result.queryTooShort) {
-        setMessage("اكتب حرفين على الأقل للبحث بالاسم، أو أدخل باركود/كود كامل.");
-        setSearchState("empty");
-      } else {
-        setSearchState(result.rows.length || nextPage > 1 ? "success" : "empty");
-      }
-    } catch (error) {
-      const apiError = error instanceof StockCheckApiError ? error : null;
-      const text = error instanceof Error ? error.message : "تعذر تنفيذ البحث.";
-      if (apiError?.status === 401) {
-        setAuth("locked");
-        setMessage("انتهت الجلسة. أدخل رمز الدخول مرة أخرى.");
-      } else if (apiError?.status === 503) {
-        setSearchState("offline");
-      } else {
-        setSearchState("error");
-      }
-      setMessage(text);
-      if (apiError?.payload && typeof apiError.payload === "object" && "lastSuccessfulCheck" in apiError.payload) {
-        setStatus({
-          success: false,
-          live: false,
-          message: text,
-          lastSuccessfulCheck: String((apiError.payload as { lastSuccessfulCheck?: unknown }).lastSuccessfulCheck || ""),
-        });
-      }
-    }
+    initialisedRef.current = false;
   }
 
   if (auth === "checking") {
@@ -207,7 +481,7 @@ function StockLookupPage() {
       <main dir="rtl" className="flex min-h-screen items-center justify-center bg-background px-5">
         <div className="flex items-center gap-2 text-sm font-bold text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" />
-          جارٍ التحقق من الجلسة...
+          جاري التحقق من الجلسة...
         </div>
       </main>
     );
@@ -224,6 +498,10 @@ function StockLookupPage() {
       />
     );
   }
+
+  const showInitialLoading = syncState === "loading-cache" || (syncState === "syncing" && inventory.length === 0);
+  const noResults = query.trim() && activeResults.length === 0 && searchState !== "loading";
+  const showInventoryEmpty = !query.trim() && !showInitialLoading && inventory.length === 0;
 
   return (
     <main dir="rtl" className="min-h-screen bg-background pb-10">
@@ -248,76 +526,107 @@ function StockLookupPage() {
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              onKeyDown={(event) => event.key === "Enter" && runSearch(1)}
               inputMode="search"
-              placeholder="ابحث باسم الصنف أو الباركود"
+              placeholder="ابحث باسم الصنف أو الباركود أو الكود"
               className="h-13 w-full rounded-xl border-2 border-border bg-background py-3.5 pr-11 pl-3 text-[15px] font-semibold text-foreground outline-none placeholder:font-normal placeholder:text-muted-foreground focus:border-primary"
             />
           </div>
-          <button
-            onClick={() => runSearch(1)}
-            disabled={!query.trim() || searchState === "loading"}
-            className="mt-2 h-12 w-full rounded-xl bg-primary text-sm font-extrabold text-primary-foreground disabled:opacity-60 active:scale-[0.99]"
-          >
-            {searchState === "loading" ? "جارٍ البحث..." : "بحث"}
-          </button>
+
+          <div className="mt-2 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
+            <p className="min-w-0 truncate text-[11px] font-bold text-muted-foreground">
+              {syncState === "syncing"
+                ? `جاري المزامنة: ${syncProgress.loaded} / ${syncProgress.total || "..."}`
+                : `تم تحميل ${inventory.length} من ${inventoryTotal || inventory.length} صنف`}
+            </p>
+            <button
+              onClick={() => syncInventory({ manual: true })}
+              disabled={syncState === "syncing"}
+              className="flex h-9 items-center gap-1.5 rounded-lg border border-border px-3 text-[11px] font-extrabold text-muted-foreground disabled:opacity-60 active:scale-95"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${syncState === "syncing" ? "animate-spin" : ""}`} />
+              تحديث
+            </button>
+          </div>
         </div>
 
-        <ConnectionBar status={status} lastCheckText={lastCheckText} />
+        <ConnectionBar status={status} syncState={syncState} lastSyncText={lastSyncText} />
       </div>
 
-      <section className="px-4 pt-3">
-        {searchState === "idle" && (
-          <StateBlock
-            icon={<PackageSearch className="h-7 w-7" />}
-            title="ابدأ بالبحث"
-            body="اكتب اسم الصنف أو الباركود لعرض التوفر والكمية وسعر البيع من المخزون الحالي."
-          />
+      <section className="space-y-3 px-4 pt-3">
+        {offline && (
+          <OfflineBanner message={syncMessage} lastSyncText={lastSyncText} />
         )}
 
-        {searchState === "loading" && (
+        {showInitialLoading && (
           <div className="space-y-2">
             <div className="flex items-center justify-center gap-2 py-3 text-xs font-bold text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
-              جارٍ التحقق من المخزون...
+              جاري تحميل المخزون...
             </div>
             {[0, 1, 2].map((index) => (
-              <div key={index} className="h-[76px] animate-pulse rounded-xl border border-border bg-muted" />
+              <div key={index} className="h-[92px] animate-pulse rounded-xl border border-border bg-muted" />
             ))}
           </div>
         )}
 
-        {searchState === "empty" && (
+        {showInventoryEmpty && (
+          <StateBlock
+            icon={<PackageSearch className="h-7 w-7" />}
+            title="لا توجد بيانات محفوظة"
+            body="سجّل الدخول أثناء اتصال المنظومة حتى يتم تحميل المخزون لأول مرة."
+          />
+        )}
+
+        {noResults && (
           <StateBlock
             icon={<PackageSearch className="h-7 w-7" />}
             title="لا توجد نتائج"
-            body={message || "لم يتم العثور على صنف مطابق. تحقق من الاسم أو جرّب الباركود."}
+            body={searchMessage || "لم يتم العثور على صنف مطابق. تحقق من الاسم أو جرّب الباركود."}
           />
         )}
 
-        {searchState === "offline" && (
-          <OfflineBlock message={message} lastCheckText={lastCheckText} />
-        )}
-
-        {searchState === "error" && (
+        {searchState === "error" && !offline && (
           <StateBlock
             icon={<AlertTriangle className="h-7 w-7" />}
             title="تعذر تنفيذ البحث"
-            body={message || "حاول مرة أخرى بعد قليل."}
+            body={searchMessage || "حاول مرة أخرى بعد قليل."}
           />
         )}
 
-        {searchState === "success" && (
+        {activeResults.length > 0 && (
           <div className="space-y-2">
-            <p className="px-1 text-[11px] font-bold text-muted-foreground">
-              يعرض {items.length} من {totalCount} نتيجة لـ "{submittedQuery}"
-            </p>
-            {items.map((item) => (
-              <ResultCard key={`${item.itemCode}-${item.barcode}`} item={item} onCopy={copyText} />
+            <div className="flex items-center justify-between gap-2 px-1 text-[11px] font-bold text-muted-foreground">
+              <span>
+                {query.trim()
+                  ? `يعرض ${visibleItems.length} من ${activeTotal} نتيجة`
+                  : `يعرض ${visibleItems.length} من ${activeTotal} صنف`}
+              </span>
+              {searchState === "loading" && (
+                <span className="flex items-center gap-1">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  بحث مباشر
+                </span>
+              )}
+            </div>
+
+            {visibleItems.map((item) => (
+              <ResultCard
+                key={`${item.itemCode || "item"}-${item.barcode || item.name}`}
+                item={item}
+                offline={offline}
+                onCopy={copyText}
+              />
             ))}
-            {hasMore && (
+
+            {(hasLocalMore || (query.trim() && !canUseLocalSearch && searchHasMore)) && (
               <button
-                onClick={() => runSearch(page + 1)}
+                onClick={() => {
+                  if (query.trim() && !canUseLocalSearch && searchHasMore && visibleItems.length >= searchItems.length) {
+                    loadMoreSearchResults();
+                    return;
+                  }
+                  setVisibleLimit((current) => current + LOCAL_PAGE_SIZE);
+                }}
                 className="h-11 w-full rounded-lg border border-border text-xs font-extrabold text-muted-foreground active:scale-[0.99]"
               >
                 تحميل المزيد
@@ -336,27 +645,69 @@ function StockLookupPage() {
   );
 }
 
-function ConnectionBar({ status, lastCheckText }: { status: StatusResponse | null; lastCheckText: string }) {
-  const online = status?.live === true;
+function ConnectionBar({
+  status,
+  syncState,
+  lastSyncText,
+}: {
+  status: StatusResponse | null;
+  syncState: SyncState;
+  lastSyncText: string;
+}) {
+  const online = status?.live === true && syncState !== "offline";
+  const syncing = syncState === "syncing" || syncState === "loading-cache";
+
   return (
-    <div className={`mt-2 flex w-full items-center justify-between px-4 py-1.5 text-[11px] font-bold ${online ? "bg-ok-soft text-ok" : "bg-danger-soft text-danger"}`}>
-      <span className="flex items-center gap-1.5">
-        {online ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />}
-        {online ? "متصل بالمخزون" : "تعذر التحقق من المخزون حاليًا"}
+    <div
+      className={`mt-2 flex w-full items-center justify-between gap-2 px-4 py-1.5 text-[11px] font-bold ${
+        online ? "bg-ok-soft text-ok" : "bg-danger-soft text-danger"
+      }`}
+    >
+      <span className="flex min-w-0 items-center gap-1.5">
+        {syncing ? (
+          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+        ) : online ? (
+          <Wifi className="h-3.5 w-3.5 shrink-0" />
+        ) : (
+          <WifiOff className="h-3.5 w-3.5 shrink-0" />
+        )}
+        <span className="truncate">
+          {syncing ? "جاري مزامنة المخزون" : online ? "متصل بالمخزون" : "غير متصل بالمنظومة"}
+        </span>
       </span>
-      {lastCheckText && <span className="text-muted-foreground">آخر اتصال ناجح: {lastCheckText}</span>}
+      {lastSyncText && <span className="shrink-0 text-muted-foreground">آخر تحديث: {lastSyncText}</span>}
+    </div>
+  );
+}
+
+function OfflineBanner({ message, lastSyncText }: { message: string; lastSyncText: string }) {
+  return (
+    <div className="rounded-xl border border-danger/30 bg-danger-soft p-3">
+      <div className="flex items-start gap-2">
+        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-danger" />
+        <div className="min-w-0">
+          <p className="text-sm font-extrabold text-danger">غير متصل بالمنظومة</p>
+          <p className="mt-0.5 text-xs font-bold text-muted-foreground">البيانات المعروضة هي آخر نسخة محفوظة</p>
+          {lastSyncText && <p className="mt-0.5 text-[11px] text-muted-foreground">آخر تحديث ناجح: {lastSyncText}</p>}
+          {message && <p className="mt-1 text-[11px] leading-5 text-muted-foreground">{message}</p>}
+        </div>
+      </div>
     </div>
   );
 }
 
 function ResultCard({
   item,
+  offline,
   onCopy,
 }: {
   item: StockCheckItem;
+  offline: boolean;
   onCopy: (text: string, successMessage: string) => Promise<void>;
 }) {
   const available = item.availability === "available";
+  const reply = replyFor(item, offline);
+
   return (
     <article className="rounded-xl border border-border bg-card p-3">
       <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2">
@@ -383,9 +734,15 @@ function ResultCard({
         </p>
       </div>
 
+      {offline && (
+        <p className="mt-2 rounded-md border border-danger/20 bg-danger-soft px-2 py-1 text-[11px] font-bold text-danger">
+          هذا التوفر من آخر تحديث محفوظ وليس تحققًا مباشرًا.
+        </p>
+      )}
+
       <div className="mt-2.5 grid grid-cols-[1fr_auto] gap-2">
         <button
-          onClick={() => onCopy(replyFor(item), "تم نسخ الرد")}
+          onClick={() => onCopy(reply, "تم نسخ الرد")}
           className="flex h-11 items-center justify-center gap-1.5 rounded-lg bg-primary text-xs font-extrabold text-primary-foreground active:scale-[0.99]"
         >
           <Copy className="h-4 w-4" />
@@ -400,22 +757,9 @@ function ResultCard({
       </div>
 
       <p className="mt-2 rounded-md bg-muted px-2 py-1.5 text-[11px] leading-5 text-muted-foreground whitespace-pre-line">
-        {replyFor(item)}
+        {reply}
       </p>
     </article>
-  );
-}
-
-function OfflineBlock({ message, lastCheckText }: { message: string; lastCheckText: string }) {
-  return (
-    <div className="rounded-xl border border-danger/30 bg-danger-soft p-4 text-center">
-      <AlertTriangle className="mx-auto h-7 w-7 text-danger" />
-      <p className="mt-2 text-sm font-extrabold text-danger">تعذر التحقق من المخزون حاليًا</p>
-      <p className="mt-1 text-xs text-muted-foreground">
-        {message || "لا يمكن تأكيد التوفر أو الكمية الآن. لا تعتمد على أي قيمة سابقة."}
-      </p>
-      {lastCheckText && <p className="mt-1 text-[11px] font-bold text-muted-foreground">آخر اتصال ناجح: {lastCheckText}</p>}
-    </div>
   );
 }
 
@@ -478,7 +822,7 @@ function AccessScreen({
             disabled={!pin || loading}
             className="mt-3 h-12 w-full rounded-xl bg-primary text-sm font-extrabold text-primary-foreground disabled:opacity-60 active:scale-[0.99]"
           >
-            {loading ? "جارٍ الدخول..." : "دخول"}
+            {loading ? "جاري الدخول..." : "دخول"}
           </button>
 
           {message && (
@@ -488,6 +832,17 @@ function AccessScreen({
             </p>
           )}
         </form>
+
+        <div className="mt-4 grid grid-cols-2 gap-2 text-[11px] text-muted-foreground">
+          <div className="rounded-xl border border-border bg-card p-3">
+            <CheckCircle2 className="mb-1 h-4 w-4 text-ok" />
+            سعر البيع والتوفر فقط
+          </div>
+          <div className="rounded-xl border border-border bg-card p-3">
+            <Database className="mb-1 h-4 w-4 text-primary" />
+            متصل ببيانات الصيدلية
+          </div>
+        </div>
 
         <p className="mt-5 text-center text-[11px] leading-5 text-muted-foreground">
           أداة مخصصة لخدمة الزبائن فقط. لا تعرض أسعار الشراء أو الأرباح أو الموردين أو الفواتير.
