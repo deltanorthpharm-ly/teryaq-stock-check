@@ -6,7 +6,7 @@
 // You can pass additional config via defineConfig({ vite: { ... }, etc... }) if needed.
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 
-const stockCheckApiTarget = process.env.STOCK_CHECK_API_PROXY_TARGET || "http://127.0.0.1:3001";
+const stockCheckApiTarget = process.env['STOCK_CHECK_API_PROXY_TARGET'] || "http://127.0.0.1:3001";
 
 export default defineConfig({
   vite: {
@@ -23,6 +23,7 @@ export default defineConfig({
   },
   nitro: {
     preset: "node-server",
+    // @ts-expect-error serveStatic is supported by nitro but missing from the config types
     serveStatic: true,
     routeRules: {
       "/api/stock-check/**": {

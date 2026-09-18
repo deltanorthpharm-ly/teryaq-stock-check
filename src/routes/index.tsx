@@ -5,24 +5,17 @@ import {
   AlertTriangle,
   CheckCircle2,
   Copy,
-  Database,
   Loader2,
-  Lock,
-  LogOut,
   PackageSearch,
   RefreshCw,
   Search,
-  ShieldCheck,
   Wifi,
   WifiOff,
 } from "lucide-react";
 
 import {
   fetchInventoryPage,
-  getSession,
   getStatus,
-  login,
-  logout,
   searchStock,
   StockCheckApiError,
   type StockCheckItem,
@@ -157,10 +150,7 @@ async function writeClipboard(text: string) {
 }
 
 function StockLookupPage() {
-  const [auth, setAuth] = useState<AuthState>("checking");
-  const [pin, setPin] = useState("");
-  const [loginMessage, setLoginMessage] = useState("");
-  const [loginLoading, setLoginLoading] = useState(false);
+  const [auth, setAuth] = useState<AuthState>("authenticated");
   const [query, setQuery] = useState("");
   const [inventory, setInventory] = useState<StockCheckItem[]>([]);
   const [inventoryTotal, setInventoryTotal] = useState(0);
@@ -270,20 +260,6 @@ function StockLookupPage() {
     }
   }, [inventoryTotal, lastSuccessfulSync, setOfflineState]);
 
-  useEffect(() => {
-    let cancelled = false;
-    getSession()
-      .then((session) => {
-        if (cancelled) return;
-        setAuth(session.authenticated ? "authenticated" : "locked");
-      })
-      .catch(() => {
-        if (!cancelled) setAuth("locked");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     if (auth !== "authenticated" || initialisedRef.current) return;
@@ -390,7 +366,7 @@ function StockLookupPage() {
           setStatus({
             success: true,
             live: result.live,
-            lastSuccessfulCheck: result.lastSuccessfulCheck,
+            lastSuccessfulCheck: result.lastSuccessfulCheck ?? null,
           });
         })
         .catch((error) => {
@@ -444,60 +420,6 @@ function StockLookupPage() {
     }
   }
 
-  async function handleLogin() {
-    setLoginMessage("");
-    setLoginLoading(true);
-    try {
-      const session = await login(pin);
-      if (session.authenticated) {
-        setPin("");
-        initialisedRef.current = false;
-        setAuth("authenticated");
-        return;
-      }
-      setLoginMessage("تعذر فتح الجلسة.");
-    } catch (error) {
-      setLoginMessage(error instanceof Error ? error.message : "رمز الدخول غير صحيح.");
-    } finally {
-      setLoginLoading(false);
-    }
-  }
-
-  async function handleLogout() {
-    await logout().catch(() => undefined);
-    setAuth("locked");
-    setInventory([]);
-    setInventoryTotal(0);
-    setSearchItems([]);
-    setQuery("");
-    setSearchState("idle");
-    setSyncState("idle");
-    setStatus(null);
-    initialisedRef.current = false;
-  }
-
-  if (auth === "checking") {
-    return (
-      <main dir="rtl" className="flex min-h-screen items-center justify-center bg-background px-5">
-        <div className="flex items-center gap-2 text-sm font-bold text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          جاري التحقق من الجلسة...
-        </div>
-      </main>
-    );
-  }
-
-  if (auth !== "authenticated") {
-    return (
-      <AccessScreen
-        pin={pin}
-        setPin={setPin}
-        loading={loginLoading}
-        message={loginMessage}
-        onSubmit={handleLogin}
-      />
-    );
-  }
 
   const showInitialLoading = syncState === "loading-cache" || (syncState === "syncing" && inventory.length === 0);
   const noResults = query.trim() && activeResults.length === 0 && searchState !== "loading";
@@ -506,18 +428,11 @@ function StockLookupPage() {
   return (
     <main dir="rtl" className="min-h-screen bg-background pb-10">
       <div className="sticky top-0 z-20 border-b border-border bg-card/95 backdrop-blur">
-        <header className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-4 pt-3">
+        <header className="px-4 pt-3">
           <div className="min-w-0">
             <h1 className="truncate text-base font-extrabold text-foreground">استعلام المخزون</h1>
             <p className="truncate text-xs text-muted-foreground">صيدلية الترياق الشافي</p>
           </div>
-          <button
-            onClick={handleLogout}
-            className="flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-border px-3 text-xs font-bold text-muted-foreground active:scale-95"
-          >
-            <LogOut className="h-4 w-4" />
-            خروج
-          </button>
         </header>
 
         <div className="px-4 pt-2">
@@ -775,79 +690,3 @@ function StateBlock({ icon, title, body }: { icon: ReactNode; title: string; bod
   );
 }
 
-function AccessScreen({
-  pin,
-  setPin,
-  loading,
-  message,
-  onSubmit,
-}: {
-  pin: string;
-  setPin: (value: string) => void;
-  loading: boolean;
-  message: string;
-  onSubmit: () => void;
-}) {
-  return (
-    <main dir="rtl" className="flex min-h-screen flex-col items-center justify-center bg-background px-5">
-      <div className="w-full max-w-sm">
-        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-primary text-primary-foreground">
-          <ShieldCheck className="h-7 w-7" />
-        </div>
-        <h1 className="mt-4 text-center text-xl font-black text-foreground">استعلام المخزون</h1>
-        <p className="mt-1 text-center text-sm text-muted-foreground">أداة خدمة الزبائن</p>
-
-        <form
-          className="mt-6 rounded-2xl border border-border bg-card p-4"
-          onSubmit={(event) => {
-            event.preventDefault();
-            onSubmit();
-          }}
-        >
-          <label className="text-xs font-bold text-muted-foreground">رمز الدخول</label>
-          <div className="relative mt-1.5">
-            <Lock className="pointer-events-none absolute top-1/2 right-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <input
-              value={pin}
-              onChange={(event) => setPin(event.target.value.replace(/\D/g, ""))}
-              type="password"
-              inputMode="numeric"
-              autoComplete="current-password"
-              placeholder="••••••"
-              className="h-12 w-full rounded-xl border-2 border-border bg-background pr-10 pl-3 text-center text-lg font-bold tracking-[0.4em] text-foreground outline-none focus:border-primary"
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={!pin || loading}
-            className="mt-3 h-12 w-full rounded-xl bg-primary text-sm font-extrabold text-primary-foreground disabled:opacity-60 active:scale-[0.99]"
-          >
-            {loading ? "جاري الدخول..." : "دخول"}
-          </button>
-
-          {message && (
-            <p className="mt-3 flex items-center justify-center gap-1.5 rounded-lg bg-danger-soft py-2 text-xs font-bold text-danger">
-              <AlertTriangle className="h-4 w-4" />
-              {message}
-            </p>
-          )}
-        </form>
-
-        <div className="mt-4 grid grid-cols-2 gap-2 text-[11px] text-muted-foreground">
-          <div className="rounded-xl border border-border bg-card p-3">
-            <CheckCircle2 className="mb-1 h-4 w-4 text-ok" />
-            سعر البيع والتوفر فقط
-          </div>
-          <div className="rounded-xl border border-border bg-card p-3">
-            <Database className="mb-1 h-4 w-4 text-primary" />
-            متصل ببيانات الصيدلية
-          </div>
-        </div>
-
-        <p className="mt-5 text-center text-[11px] leading-5 text-muted-foreground">
-          أداة مخصصة لخدمة الزبائن فقط. لا تعرض أسعار الشراء أو الأرباح أو الموردين أو الفواتير.
-        </p>
-      </div>
-    </main>
-  );
-}
