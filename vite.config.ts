@@ -21,9 +21,9 @@ export default defineConfig({
       },
     },
   },
-  // @ts-expect-error serveStatic is supported by nitro but missing from the config types
   nitro: {
     preset: "node-server",
+    // @ts-expect-error serveStatic is supported by nitro but missing from the config types
     serveStatic: true,
     routeRules: {
       "/api/stock-check/**": {
