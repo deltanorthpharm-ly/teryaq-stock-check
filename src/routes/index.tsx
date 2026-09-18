@@ -5,24 +5,17 @@ import {
   AlertTriangle,
   CheckCircle2,
   Copy,
-  Database,
   Loader2,
-  Lock,
-  LogOut,
   PackageSearch,
   RefreshCw,
   Search,
-  ShieldCheck,
   Wifi,
   WifiOff,
 } from "lucide-react";
 
 import {
   fetchInventoryPage,
-  getSession,
   getStatus,
-  login,
-  logout,
   searchStock,
   StockCheckApiError,
   type StockCheckItem,
@@ -373,7 +366,7 @@ function StockLookupPage() {
           setStatus({
             success: true,
             live: result.live,
-            lastSuccessfulCheck: result.lastSuccessfulCheck,
+            lastSuccessfulCheck: result.lastSuccessfulCheck ?? null,
           });
         })
         .catch((error) => {
